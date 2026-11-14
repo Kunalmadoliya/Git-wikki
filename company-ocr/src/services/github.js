@@ -102,6 +102,9 @@ function shouldSkipFile(path, size) {
   return false;
 }
 
+//this function is used to parse the repo url and return the owner and repo name
+//for example, if the input is "https://github.com/owner/repo", it will return {owner: "owner", repo: "repo" , repoKey: "owner/repo"}
+
 export function parseRepo(input) {
   const clean = input
     .replace("https://github.com/", "")
@@ -111,4 +114,47 @@ export function parseRepo(input) {
   const [owner, repo] = clean.split("/");
   return {owner, repo, repoKey: `${owner}/${repo}`};
 }
- 
+
+export async function getRepoFiles(token, owner, repo) {
+  const octokit = new Octokit({auth: token});
+
+  const {data: files} = await octokit.rest.repos
+    .get({
+      owner,
+      repo,
+    })
+    .catch((error) => {
+      console.error(`Error fetching repo ${owner}/${repo}:`, error);
+      return {data: []};
+    });
+
+  const {data: tree} = await octokit.rest.git.getTree({
+    owner,
+    repo,
+    sha: files.default_branch,
+    recursive: true,
+  });
+
+  const fileArray = [];
+
+  for (const file of tree.tree) {
+    if (file.type !== "blob") {
+      continue;
+    }
+    if (shouldSkipFile(file.path, file.size)) {
+      continue;
+    }
+
+    const {data : blob} = await octokit.rest.git.getBlob({
+      owner,
+      repo,
+      file_sha: file.sha,
+    });
+    fileArray.push({path: file.path, content: Buffer.from(blob.content, "base64").toString("utf-8")});
+
+    if (fileArray.length >= 200) {
+      break;
+    }
+  }
+  return fileArray;
+}
