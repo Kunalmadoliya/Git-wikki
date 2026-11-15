@@ -3,13 +3,16 @@ import { randomUUID } from "node:crypto";
 import { inngest } from "../inngest/index.js";
 import { createIndexJob } from "../services/indexJobs.js";
 import { subscribe } from "../services/telemetryHub.js";
+import { deleteNamespace } from "../services/vectorStore.js";
 import {
   cancelSource,
   createSource,
+  deleteSource,
   findLatestSourceByRepoKey,
   getSource,
   listSources,
   resetSourceForRetry,
+  transitionSource,
   updateSource,
 } from "../store/sourceStore.js";
 
@@ -24,14 +27,16 @@ function parseRepositoryUrl(repoUrl) {
 
   const owner = match[1];
   const repo = match[2];
-  const repoKey = `${owner}/${repo}`;
+  const normalizedOwner = owner.toLowerCase();
+  const normalizedRepo = repo.toLowerCase();
+  const repoKey = `${normalizedOwner}/${normalizedRepo}`;
   return {
     owner,
     repo,
     repoKey,
     repoUrl: `https://github.com/${owner}/${repo}`,
     // Namespace is intentionally distinct from the legacy "owner-repo" form.
-    namespace: `${owner}__${repo}`.toLowerCase(),
+    namespace: `${normalizedOwner}__${normalizedRepo}`,
   };
 }
 
@@ -44,16 +49,13 @@ async function dispatchIndex(source, token) {
   // avoiding SQLite persistence and event/log exposure at the cost of retry
   // credentials being lost if this process restarts.
   const jobId = createIndexJob({
+    sourceId: source.sourceId,
     repoKey: source.repoKey,
     token,
   });
   await inngest.send({
     name: "repo/index",
-    data: {
-      repoUrl: source.repoUrl,
-      jobId,
-      sourceId: source.sourceId,
-    },
+    data: { sourceId: source.sourceId },
   });
 }
 
@@ -85,8 +87,7 @@ router.post("/", async (req, res) => {
   const token = req.body?.githubToken || process.env.GITHUB_TOKEN;
 
   if (!token) {
-    updateSource(source.sourceId, {
-      stage: "FAILED",
+    transitionSource(source.sourceId, "FAILED", {
       stageDescription: "A GitHub token is required to index this repository.",
       errorCode: "AUTH_REQUIRED",
       errorMessage: "Provide a GitHub token or configure GITHUB_TOKEN.",
@@ -104,8 +105,7 @@ router.post("/", async (req, res) => {
     await dispatchIndex(source, token);
   } catch (error) {
     console.error("[sources] Failed to dispatch indexing job:", error);
-    updateSource(source.sourceId, {
-      stage: "FAILED",
+    transitionSource(source.sourceId, "FAILED", {
       stageDescription: "Could not dispatch the indexing worker.",
       errorCode: "DISPATCH_FAILED",
       errorMessage: "Could not dispatch the indexing worker.",
@@ -204,8 +204,7 @@ router.post("/:sourceId/retry", async (req, res) => {
   const retried = resetSourceForRetry(source.sourceId);
   const token = req.body?.githubToken || process.env.GITHUB_TOKEN;
   if (!token) {
-    updateSource(source.sourceId, {
-      stage: "FAILED",
+    transitionSource(source.sourceId, "FAILED", {
       stageDescription: "A GitHub token is required to retry this repository.",
       errorCode: "AUTH_REQUIRED",
       errorMessage: "Provide a GitHub token or configure GITHUB_TOKEN.",
@@ -223,8 +222,7 @@ router.post("/:sourceId/retry", async (req, res) => {
     await dispatchIndex(retried, token);
   } catch (error) {
     console.error("[sources] Failed to dispatch retry:", error);
-    updateSource(source.sourceId, {
-      stage: "FAILED",
+    transitionSource(source.sourceId, "FAILED", {
       stageDescription: "Could not dispatch the retry worker.",
       errorCode: "DISPATCH_FAILED",
       errorMessage: "Could not dispatch the retry worker.",
@@ -241,7 +239,7 @@ router.post("/:sourceId/retry", async (req, res) => {
   return res.status(202).json(retried);
 });
 
-router.post("/:sourceId/cancel", (req, res) => {
+router.post("/:sourceId/cancel", async (req, res) => {
   const source = getSource(req.params.sourceId);
   if (!source) {
     return sendSourceError(
@@ -261,10 +259,38 @@ router.post("/:sourceId/cancel", (req, res) => {
       "Only an active source can be cancelled.",
     );
   }
-  return res.json(cancelSource(source.sourceId));
+  try {
+    await inngest.send({
+      name: "repo/index.cancel",
+      data: { sourceId: source.sourceId },
+    });
+    const cancelled = cancelSource(source.sourceId);
+    await deleteNamespace(source.namespace);
+    return res.json(cancelled);
+  } catch (error) {
+    console.error("[sources] Failed to cancel and purge source:", error);
+    if (getSource(source.sourceId)) {
+      updateSource(
+        source.sourceId,
+        {
+          errorCode: "NAMESPACE_PURGE_FAILED",
+          errorMessage: "Indexing was cancelled but its Pinecone namespace could not be purged.",
+          stageDescription: "Namespace purge failed. Retry deletion.",
+        },
+        { allowTerminalUpdate: true },
+      );
+    }
+    return sendSourceError(
+      res,
+      502,
+      "NAMESPACE_PURGE_FAILED",
+      "CANCELLED",
+      "Indexing was cancelled but its Pinecone namespace could not be purged.",
+    );
+  }
 });
 
-router.delete("/:sourceId", (req, res) => {
+router.delete("/:sourceId", async (req, res) => {
   const source = getSource(req.params.sourceId);
   if (!source) {
     return sendSourceError(
@@ -275,7 +301,39 @@ router.delete("/:sourceId", (req, res) => {
       "Source was not found.",
     );
   }
-  return res.json(cancelSource(source.sourceId));
+  try {
+    if (!["READY", "FAILED", "CANCELLED"].includes(source.stage)) {
+      await inngest.send({
+        name: "repo/index.cancel",
+        data: { sourceId: source.sourceId },
+      });
+      cancelSource(source.sourceId);
+    }
+
+    await deleteNamespace(source.namespace);
+    deleteSource(source.sourceId);
+    return res.status(204).send();
+  } catch (error) {
+    console.error("[sources] Failed to purge source namespace:", error);
+    if (getSource(source.sourceId)) {
+      updateSource(
+        source.sourceId,
+        {
+          errorCode: "NAMESPACE_PURGE_FAILED",
+          errorMessage: "Source was cancelled but its Pinecone namespace could not be purged.",
+          stageDescription: "Namespace purge failed. Retry deletion.",
+        },
+        { allowTerminalUpdate: true },
+      );
+    }
+    return sendSourceError(
+      res,
+      502,
+      "NAMESPACE_PURGE_FAILED",
+      source.stage,
+      "Source was cancelled but its Pinecone namespace could not be purged.",
+    );
+  }
 });
 
 export { parseRepositoryUrl };

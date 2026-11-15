@@ -1,453 +1,169 @@
-import React, { useState, useRef, useEffect } from "react";
-import { BentoCard } from "../bento/BentoCard";
-import { Badge } from "../common/Badge";
-import { Button } from "../common/Button";
+import React, { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { Bot, Send, User } from "lucide-react";
 import { queryRepository } from "../../services/api";
-import {
-  MessageSquare,
-  Send,
-  Bot,
-  User,
-  Copy,
-  Check,
-  FileCode2,
-  Sliders,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-  Zap,
-  Terminal,
-  Trash2,
-} from "lucide-react";
 
-/**
- * Markdown & Code formatter for Assistant responses
- */
-function FormattedMessage({ content }) {
-  if (!content) return null;
+function sourceName(source) {
+  return source?.repoKey || "this repository";
+}
 
-  // Split code blocks ```code```
-  const parts = content.split(/(```[\s\S]*?```)/g);
+function formatStatus(source) {
+  if (!source) return "Add a repository to start";
+  if (source.stage === "READY") return "";
+  return `Indexing: ${(source.progress?.stageDescription || source.stage).toLowerCase()}`;
+}
 
+function Message({ message }) {
+  const isUser = message.role === "user";
   return (
-    <div className="space-y-3 text-sm leading-relaxed text-slate-800 font-sans">
-      {parts.map((part, index) => {
-        if (part.startsWith("```") && part.endsWith("```")) {
-          const firstLineBreak = part.indexOf("\n");
-          const lang = firstLineBreak !== -1 ? part.slice(3, firstLineBreak).trim() : "code";
-          const code = firstLineBreak !== -1 ? part.slice(firstLineBreak + 1, -3) : part.slice(3, -3);
-
-          return <CodeBlock key={index} code={code} lang={lang} />;
-        }
-
-        const lines = part.split("\n");
-        return (
-          <div key={index} className="space-y-2">
-            {lines.map((line, lIndex) => {
-              const trimmed = line.trim();
-              if (!trimmed) return null;
-
-              if (trimmed.startsWith("### ")) {
-                return (
-                  <h4 key={lIndex} className="text-sm font-bold text-blue-600 mt-2 font-sans">
-                    {trimmed.replace("### ", "")}
-                  </h4>
-                );
-              }
-              if (trimmed.startsWith("## ")) {
-                return (
-                  <h3 key={lIndex} className="text-base font-bold text-slate-900 mt-3 border-b border-slate-200 pb-1 font-sans">
-                    {trimmed.replace("## ", "")}
-                  </h3>
-                );
-              }
-              if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-                return (
-                  <div key={lIndex} className="flex items-start gap-2 pl-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-2 shrink-0" />
-                    <span>{parseInline(trimmed.substring(2))}</span>
-                  </div>
-                );
-              }
-
-              return (
-                <p key={lIndex} className="text-slate-800 font-sans">
-                  {parseInline(line)}
-                </p>
-              );
-            })}
+    <div className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}>
+      {!isUser && (
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+          <Bot className="h-4 w-4" />
+        </div>
+      )}
+      <div
+        className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
+          isUser
+            ? "rounded-br-sm bg-blue-600 text-white"
+            : "rounded-bl-sm bg-slate-100 text-slate-800"
+        }`}
+      >
+        {message.content}
+        {message.sources?.length > 0 && (
+          <div className="mt-2 border-t border-slate-200 pt-2 text-xs text-slate-500">
+            {message.sources.length} citations
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function parseInline(text) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return (
-        <code key={i} className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-blue-700 font-mono text-xs">
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return (
-        <strong key={i} className="font-semibold text-slate-900">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    return part;
-  });
-}
-
-function CodeBlock({ code, lang }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="my-3 rounded-xl overflow-hidden border border-slate-800 bg-[#0F172A] shadow-md text-left">
-      <div className="flex items-center justify-between px-3.5 py-2 bg-slate-900 border-b border-slate-800 text-xs font-mono text-slate-400">
-        <span className="flex items-center gap-1.5">
-          <Terminal className="w-3.5 h-3.5 text-blue-400" />
-          {lang}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span>{copied ? "Copied" : "Copy"}</span>
-        </button>
+        )}
       </div>
-      <pre className="p-3.5 overflow-x-auto text-xs font-mono text-slate-200 leading-normal">
-        <code>{code}</code>
-      </pre>
+      {isUser && (
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white">
+          <User className="h-4 w-4" />
+        </div>
+      )}
     </div>
   );
 }
 
-export function CodebaseChatbot({ targetRepo, isIndexed = false }) {
+export function CodebaseChatbot({ activeSource }) {
   const [inputQuery, setInputQuery] = useState("");
-  const [topK, setTopK] = useState(5);
-  const [messages, setMessages] = useState([
-    {
-      id: "initial-welcome",
-      role: "assistant",
-      content: `👋 **GitWiki Assistant Online.**\n\nTargeting **${targetRepo.replace("https://github.com/", "")}**.\n\nAsk me anything about this repository: from architecture overviews, routing logic, and data flow, to specific functions and edge cases.`,
-      sources: [],
-      timestamp: "Just now",
-    },
-  ]);
-  const [expandedSources, setExpandedSources] = useState({});
-
-  const chatBottomRef = useRef(null);
-
+  const [messages, setMessages] = useState([]);
+  const bottomRef = useRef(null);
   const queryMutation = useMutation({
-    mutationFn: (payload) => queryRepository(payload),
+    mutationFn: queryRepository,
     onSuccess: (data) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: data.answer,
-          sources: data.results || [],
-          repoKey: data.repoKey,
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: data.answer, sources: data.results || [] },
       ]);
     },
     onError: (error) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: `⚠️ **Query Error:** ${error.message || "Failed to query repository from Pinecone vector store."}`,
-          sources: [],
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: error.message || "Query failed." },
       ]);
     },
   });
 
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    setMessages([]);
+    setInputQuery("");
+  }, [activeSource?.sourceId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, queryMutation.isPending]);
 
-  const handleSend = (e) => {
-    if (e) e.preventDefault();
-    if (!isIndexed || !inputQuery.trim() || queryMutation.isPending) return;
+  const isReady = activeSource?.stage === "READY";
+  const canSend =
+    Boolean(activeSource) &&
+    isReady &&
+    Boolean(inputQuery.trim()) &&
+    !queryMutation.isPending;
+  const disabledReason = queryMutation.isPending
+    ? "Querying..."
+    : formatStatus(activeSource) || (!inputQuery.trim() ? "Ask a question to send" : "");
+  const suggestions = activeSource?.summary?.suggestedQueries?.length
+    ? activeSource.summary.suggestedQueries
+    : [];
 
-    const userQuestion = inputQuery.trim();
+  const handleSend = (event) => {
+    event?.preventDefault();
+    if (!canSend) return;
+    const query = inputQuery.trim();
     setInputQuery("");
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        role: "user",
-        content: userQuestion,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      },
-    ]);
-
-    queryMutation.mutate({
-      repoUrl: targetRepo,
-      query: userQuestion,
-      topK: Number(topK),
-    });
+    setMessages((current) => [...current, { role: "user", content: query }]);
+    queryMutation.mutate({ sourceId: activeSource.sourceId, query });
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyDown = (event) => {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
       handleSend();
     }
   };
 
-  const toggleSources = (msgId) => {
-    setExpandedSources((prev) => ({
-      ...prev,
-      [msgId]: !prev[msgId],
-    }));
-  };
-
-  const samplePrompts = [
-    "Explain project architecture & core flow",
-    "Where is request routing handled?",
-    "How does document chunking work?",
-    "What dependencies and scripts are defined?",
-  ];
-
   return (
-    <div id="codebase-chatbot-section">
-      <BentoCard
-        colSpan={12}
-        icon={<Bot className="w-5 h-5 text-blue-600" />}
-        title="Phase 2: Codebase Intelligence Chatbot"
-        subtitle={`Chat with: ${targetRepo.replace("https://github.com/", "")}`}
-        badge={
-          <Badge variant={isIndexed ? "success" : "primary"}>
-          {isIndexed ? "Index Loaded" : "Index Required"}
-          </Badge>
-        }
-        action={
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              setMessages([
-                {
-                  id: "initial-welcome",
-                  role: "assistant",
-                  content: `Conversation cleared. Targeting **${targetRepo.replace("https://github.com/", "")}**. Ask any question to search Pinecone vectors.`,
-                  sources: [],
-                  timestamp: "Just now",
-                },
-              ])
-            }
-            leftIcon={<Trash2 className="w-3.5 h-3.5" />}
-          >
-            Clear Chat
-          </Button>
-        }
-        className="bg-white"
-      >
-        {!isIndexed && (
-          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            Index this repository and wait for the <strong>Index Ready</strong> state before querying it.
-          </div>
-        )}
-        <div className="flex flex-col h-[650px] space-y-4">
-          {/* Chat Message Scrollable Container */}
-          <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-            {messages.map((msg) => {
-              const isUser = msg.role === "user";
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
-                >
-                  {/* Avatar */}
-                  <div
-                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border text-xs ${
-                      isUser
-                        ? "bg-blue-600 border-blue-500 text-white shadow-xs"
-                        : "bg-slate-100 border-slate-200 text-blue-600"
-                    }`}
-                  >
-                    {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-                  </div>
-
-                  {/* Message Bubble */}
-                  <div
-                    className={`max-w-[85%] rounded-2xl p-4 space-y-2 border shadow-2xs ${
-                      isUser
-                        ? "bg-blue-600 text-white border-blue-500 rounded-tr-none"
-                        : "bg-slate-50 text-slate-800 border-slate-200 rounded-tl-none"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-4 text-[11px] pb-1 border-b font-sans opacity-80">
-                      <span className="font-semibold">
-                        {isUser ? "You" : "GitWiki Assistant (GPT-4o-mini)"}
-                      </span>
-                      <span>{msg.timestamp}</span>
-                    </div>
-
-                    {isUser ? (
-                      <p className="text-sm font-sans whitespace-pre-wrap">{msg.content}</p>
-                    ) : (
-                      <FormattedMessage content={msg.content} />
-                    )}
-
-                    {/* Citations / Sources Accordion if available */}
-                    {!isUser && msg.sources && msg.sources.length > 0 && (
-                      <div className="pt-2 mt-2 border-t border-slate-200">
-                        <button
-                          type="button"
-                          onClick={() => toggleSources(msg.id)}
-                          className="flex items-center justify-between w-full text-xs text-blue-600 hover:text-blue-800 font-mono py-1 transition-colors"
-                        >
-                          <span className="flex items-center gap-1.5 font-semibold">
-                            <FileCode2 className="w-3.5 h-3.5" />
-                            {msg.sources.length} Pinecone Citations & Chunks
-                          </span>
-                          {expandedSources[msg.id] ? (
-                            <ChevronUp className="w-3.5 h-3.5" />
-                          ) : (
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-
-                        {expandedSources[msg.id] && (
-                          <div className="mt-2 space-y-2 max-h-56 overflow-y-auto pr-1">
-                            {msg.sources.map((src, sIdx) => {
-                              const scorePercent = src.score ? Math.round(src.score * 100) : null;
-                              return (
-                                <div
-                                  key={sIdx}
-                                  className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs font-mono space-y-1.5 shadow-2xs"
-                                >
-                                  <div className="flex items-center justify-between text-slate-600">
-                                    <span className="font-semibold text-slate-900 truncate max-w-[70%]">
-                                      {src.source || `Chunk #${sIdx + 1}`}
-                                    </span>
-                                    {scorePercent && (
-                                      <Badge variant="success" size="sm">
-                                        {scorePercent}% match
-                                      </Badge>
-                                    )}
-                                  </div>
-                                  <pre className="p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-800 whitespace-pre-wrap max-h-24 overflow-y-auto">
-                                    <code>{src.content}</code>
-                                  </pre>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex min-h-[360px] flex-col p-4">
+        <div className="flex-1 space-y-3">
+          {messages.length === 0 && (
+            <div className="py-8 text-center">
+              <p className="text-sm text-slate-500">
+                {activeSource?.summary?.overview || "Add a repo link to get started"}
+              </p>
+              {isReady && suggestions.length > 0 && (
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {suggestions.slice(0, 3).map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => setInputQuery(suggestion)}
+                      className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
                 </div>
-              );
-            })}
-
-            {/* Loading Indicator */}
-            {queryMutation.isPending && (
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-blue-600 shrink-0">
-                  <Bot className="w-4 h-4 animate-pulse" />
-                </div>
-                <div className="p-4 rounded-2xl rounded-tl-none bg-slate-50 border border-slate-200 space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-blue-600 font-mono font-medium">
-                    <Sparkles className="w-3.5 h-3.5 animate-spin" />
-                    Searching Pinecone vector namespace & synthesizing answer with GPT-4o-mini...
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div ref={chatBottomRef} />
-          </div>
-
-          {/* Prompt Recommendations */}
-          <div className="flex items-center gap-2 flex-wrap pt-2">
-            <span className="text-xs text-slate-500 flex items-center gap-1 font-sans font-medium">
-              <Zap className="w-3.5 h-3.5 text-amber-500" /> Prompts:
-            </span>
-            {samplePrompts.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                onClick={() => setInputQuery(prompt)}
-                className="text-xs px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 transition-all font-sans"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-
-          {/* Bottom Chat Input Form */}
-          <form onSubmit={handleSend} className="space-y-3 pt-2 border-t border-slate-100">
-            <div className="relative flex items-center">
-              <textarea
-                rows={2}
-                value={inputQuery}
-                onChange={(e) => setInputQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask any question about the codebase (Press Enter to send, Shift+Enter for newline)..."
-                disabled={queryMutation.isPending}
-                className="w-full pl-4 pr-24 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 font-sans outline-none resize-none focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all shadow-2xs"
-              />
-              <div className="absolute right-3 flex items-center gap-2">
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="primary"
-                  isLoading={queryMutation.isPending}
-                  disabled={!isIndexed || !inputQuery.trim()}
-                  rightIcon={<Send className="w-3.5 h-3.5" />}
-                >
-                  Send
-                </Button>
-              </div>
+              )}
             </div>
-
-            {/* Telemetry & Top-K bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500 font-sans">
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-1.5 font-mono text-slate-600 font-medium">
-                  <Sliders className="w-3.5 h-3.5 text-blue-600" /> Top-K Citations:
-                </span>
-                <input
-                  type="range"
-                  min="1"
-                  max="20"
-                  value={topK}
-                  onChange={(e) => setTopK(e.target.value)}
-                  className="w-24 accent-blue-600 cursor-pointer"
-                />
-                <span className="font-mono text-blue-600 font-bold">{topK}</span>
-              </div>
-              <span className="text-[11px] text-slate-400 font-mono">
-                Pinecone Document Inference • Zero Login Required
-              </span>
-            </div>
-          </form>
+          )}
+          {messages.map((message, index) => (
+            <Message key={`${message.role}-${index}`} message={message} />
+          ))}
+          {queryMutation.isPending && (
+            <p className="text-xs text-slate-400">Searching the repository...</p>
+          )}
+          <div ref={bottomRef} />
         </div>
-      </BentoCard>
-    </div>
+
+        <form onSubmit={handleSend} className="mt-5 border-t border-slate-100 pt-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={inputQuery}
+              onChange={(event) => setInputQuery(event.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={2}
+              placeholder="Ask a question about the codebase"
+              className="min-h-[52px] flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Send
+            </button>
+          </div>
+          <p className="mt-2 min-h-4 text-xs text-slate-500">{disabledReason}</p>
+        </form>
+      </div>
+    </section>
   );
 }

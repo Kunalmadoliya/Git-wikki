@@ -145,6 +145,12 @@ export function initSourceStore() {
 
 }
 
+export function deleteSource(sourceId) {
+  requireDatabase()
+    .prepare("DELETE FROM sources WHERE sourceId = ?")
+    .run(sourceId);
+}
+
 export function closeSourceStore() {
   database?.close();
   database = undefined;
@@ -184,10 +190,13 @@ export function createSource({
 }
 
 export function getSource(sourceId) {
-  const row = requireDatabase()
+  return toApiSource(getSourceRecord(sourceId));
+}
+
+export function getSourceRecord(sourceId) {
+  return requireDatabase()
     .prepare("SELECT * FROM sources WHERE sourceId = ?")
     .get(sourceId);
-  return toApiSource(row);
 }
 
 export function listSources() {
@@ -207,6 +216,19 @@ export function findLatestSourceByRepoKey(repoKey) {
 }
 
 export function updateSource(sourceId, updates, options = {}) {
+  const current = requireDatabase()
+    .prepare("SELECT stage FROM sources WHERE sourceId = ?")
+    .get(sourceId);
+  if (!current) return null;
+  if ("stage" in updates && !options.internal) {
+    throw new Error("Status changes must use transitionSource");
+  }
+  if (TERMINAL_STAGES.has(current.stage) && !options.allowTerminalUpdate) {
+    throw new Error(
+      `Cannot update terminal source ${sourceId} in ${current.stage}`,
+    );
+  }
+
   const allowedFields = new Set([
     "stage",
     "stageProgress",
@@ -220,10 +242,6 @@ export function updateSource(sourceId, updates, options = {}) {
     "errorMessage",
     "summary",
   ]);
-  if ("stage" in updates && !options.internal) {
-    throw new Error("Status changes must use transitionSource");
-  }
-
   const changes = Object.entries(updates).filter(([key]) =>
     allowedFields.has(key),
   );

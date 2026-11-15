@@ -19,7 +19,13 @@ export class QueryValidationError extends Error {
  * The repository URL is required because it maps to the Pinecone namespace
  * created during indexing.
  */
-export function prepareQuery({ repoUrl, query, topK = DEFAULT_TOP_K } = {}) {
+export function prepareQuery({
+  repoUrl,
+  sourceId,
+  namespace,
+  query,
+  topK = DEFAULT_TOP_K,
+} = {}) {
   if (typeof repoUrl !== "string" || !repoUrl.trim()) {
     throw new QueryValidationError("repoUrl is required");
   }
@@ -51,7 +57,9 @@ export function prepareQuery({ repoUrl, query, topK = DEFAULT_TOP_K } = {}) {
   }
 
   return {
+    sourceId: sourceId || null,
     repoKey: parsed.repoKey,
+    namespace: namespace || parsed.repoKey.replace("/", "-"),
     query: query.trim(),
     topK: normalisedTopK,
   };
@@ -63,6 +71,7 @@ export async function runRepositoryQuery(input) {
     prepared.query,
     prepared.repoKey,
     prepared.topK,
+    prepared.namespace,
   );
   const context = results
     .filter((result) => result.text)

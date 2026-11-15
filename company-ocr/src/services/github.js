@@ -118,26 +118,57 @@ export function parseRepo(input) {
   return {owner, repo, repoKey: `${owner}/${repo}`};
 }
 
-export async function getRepoFiles(token, owner, repo) {
+export async function getRepoDetails(token, owner, repo) {
   const octokit = new Octokit({auth: token});
-
   const {data: repoInfo} = await octokit.rest.repos.get({owner, repo});
 
   // Empty repositories have no commits yet — git/trees would 404
   if (repoInfo.size === 0) {
-    console.warn(
-      `Repository ${owner}/${repo} is empty (no commits). Nothing to index.`,
-    );
-    return [];
+    return {
+      repoInfo,
+      defaultBranch: repoInfo.default_branch,
+      commitSha: null,
+    };
   }
 
   const defaultBranch = repoInfo.default_branch;
+  const {data: branch} = await octokit.rest.repos.getBranch({
+    owner,
+    repo,
+    branch: defaultBranch,
+  });
+
+  return {
+    repoInfo,
+    defaultBranch,
+    commitSha: branch.commit.sha,
+  };
+}
+
+export async function getRepoFiles(
+  token,
+  owner,
+  repo,
+  {details, onFilesDiscovered, onFilesFetched} = {},
+) {
+  const octokit = new Octokit({auth: token});
+  const repoDetails = details || await getRepoDetails(token, owner, repo);
+  const {repoInfo, defaultBranch, commitSha} = repoDetails;
+
+  if (repoInfo.size === 0) {
+    console.warn(
+      `Repository ${owner}/${repo} is empty (no commits). Nothing to index.`,
+    );
+    onFilesDiscovered?.(0);
+    return [];
+  }
+
   console.log(`Fetching tree for ${owner}/${repo} on branch: ${defaultBranch}`);
 
   const {data: tree} = await octokit.rest.git.getTree({
     owner,
     repo,
-    tree_sha: defaultBranch,
+    tree_sha: commitSha || defaultBranch,
     recursive: true,
   });
 
@@ -148,6 +179,7 @@ export async function getRepoFiles(token, owner, repo) {
   console.log(
     `[github] ${blobs.length} files to fetch (of ${tree.tree.length} total tree entries)`,
   );
+  onFilesDiscovered?.(blobs.length);
 
   const fileArray = [];
 
@@ -168,6 +200,7 @@ export async function getRepoFiles(token, owner, repo) {
       }),
     );
     fileArray.push(...results);
+    onFilesFetched?.(fileArray.length);
     console.log(`[github] fetched ${Math.min(i + BLOB_CONCURRENCY, blobs.length)}/${blobs.length} files`);
   }
 

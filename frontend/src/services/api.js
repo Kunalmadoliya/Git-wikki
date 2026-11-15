@@ -8,45 +8,27 @@ const API_BASE = ""; // Uses Vite proxy to forward /api -> http://localhost:3000
  * Fetch backend status & configured services
  */
 export async function fetchSystemStatus() {
-  try {
-    const res = await fetch(`${API_BASE}/api/status`);
-    if (!res.ok) {
-      throw new Error(`Server returned ${res.status}: ${res.statusText}`);
-    }
-    return await res.json();
-  } catch (err) {
-    // Fallback check to root "/"
-    try {
-      const rootRes = await fetch(`${API_BASE}/`);
-      if (rootRes.ok) {
-        return {
-          status: "online",
-          service: "GitWiki Engine",
-          pineconeIndex: "ocr",
-          hasGithubToken: true,
-          hasPineconeKey: true,
-          hasOpenAIKey: true,
-          timestamp: new Date().toISOString(),
-        };
-      }
-    } catch {
-      // offline
-    }
-    throw new Error(err.message || "Failed to connect to backend server");
+  const res = await fetch(`${API_BASE}/api/status`);
+  if (!res.ok) {
+    throw new Error(`Server returned ${res.status}: ${res.statusText}`);
   }
+  return await res.json();
 }
 
-/**
- * Trigger background indexing of a GitHub repository
- * @param {{ repoUrl: string, githubToken?: string }} payload
- */
-export async function indexRepository({ repoUrl, githubToken }) {
-  const body = { repoUrl: repoUrl.trim() };
-  if (githubToken && githubToken.trim()) {
-    body.githubToken = githubToken.trim();
+export async function fetchSources() {
+  const res = await fetch(`${API_BASE}/api/sources`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || "Failed to load repository sources");
   }
+  return data.sources || [];
+}
 
-  const res = await fetch(`${API_BASE}/api/index`, {
+export async function createSource({ repoUrl, githubToken }) {
+  const body = { repoUrl: repoUrl.trim() };
+  if (githubToken?.trim()) body.githubToken = githubToken.trim();
+
+  const res = await fetch(`${API_BASE}/api/sources`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -56,42 +38,58 @@ export async function indexRepository({ repoUrl, githubToken }) {
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || "Failed to start repository indexing");
-  }
-
-  return data; // { message, jobId, repoKey, status }
-}
-
-export async function fetchIndexStatus(jobId) {
-  const res = await fetch(`${API_BASE}/api/index/status/${encodeURIComponent(jobId)}`);
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || "Failed to read indexing status");
+    throw new Error(data.message || "Failed to start repository indexing");
   }
   return data;
 }
 
-/**
- * Query an indexed repository with Pinecone similarity search + LLM
- * @param {{ repoUrl: string, query: string, topK?: number }} payload
- */
-export async function queryRepository({ repoUrl, query, topK = 5 }) {
+export async function fetchSourceStatus(sourceId) {
+  const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}/status`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || "Failed to read source status");
+  }
+  return data;
+}
+
+export async function retrySource(sourceId, githubToken) {
+  const body = githubToken?.trim() ? { githubToken: githubToken.trim() } : {};
+  const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Failed to retry indexing");
+  return data;
+}
+
+export async function deleteSource(sourceId) {
+  const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.message || "Failed to delete source");
+  }
+}
+
+export async function queryRepository({ sourceId, query }) {
   const res = await fetch(`${API_BASE}/api/query`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      repoUrl: repoUrl.trim(),
+      sourceId,
       query: query.trim(),
-      topK: Number(topK) || 5,
     }),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || "Query failed");
+    throw new Error(data.message || data.error || "Query failed");
   }
 
-  return data; // { repoKey, query, topK, answer, results: [{ content, source, score }] }
+  return data;
 }

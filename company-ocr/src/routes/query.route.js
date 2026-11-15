@@ -4,30 +4,53 @@ import {
   prepareQuery,
   runRepositoryQuery,
 } from "../services/query.js";
-import { getLatestIndexJob } from "../services/indexJobs.js";
+import {
+  findLatestSourceByRepoKey,
+  getSource,
+} from "../store/sourceStore.js";
 
 const router = Router();
 
 /**
  * POST /api/query
- * Body: { repoUrl: "https://github.com/owner/repo", query: "...", topK?: number }
+ * Body: { sourceId: "src_...", query: "...", topK?: number }
  *
  * repoUrl selects the Pinecone namespace populated by /api/index.
  */
 router.post("/", async (req, res) => {
   try {
-    const prepared = prepareQuery(req.body);
-    const indexJob = getLatestIndexJob(prepared.repoKey);
-    if (!indexJob || indexJob.status !== "completed") {
+    let source;
+    if (typeof req.body?.sourceId === "string" && req.body.sourceId.trim()) {
+      source = getSource(req.body.sourceId.trim());
+    } else if (typeof req.body?.repoUrl === "string") {
+      console.warn(
+        "[query] repoUrl is deprecated; use sourceId from POST /api/sources",
+      );
+      const preparedLegacy = prepareQuery(req.body);
+      source = findLatestSourceByRepoKey(preparedLegacy.repoKey);
+    }
+
+    if (!source) {
+      return res.status(404).json({
+        code: "SOURCE_NOT_FOUND",
+        stage: "UNKNOWN",
+        message: "The requested repository source does not exist.",
+      });
+    }
+    if (source.stage !== "READY") {
       return res.status(409).json({
-        error: "Repository is not ready for querying",
-        repoKey: prepared.repoKey,
-        indexingStatus: indexJob?.status || "not_indexed",
-        phase: indexJob?.phase || "unknown",
+        code: "SOURCE_NOT_READY",
+        stage: source.stage,
+        message: `Source is not ready for querying; current stage is ${source.stage}.`,
       });
     }
 
-    const result = await runRepositoryQuery(req.body);
+    const result = await runRepositoryQuery({
+      ...req.body,
+      sourceId: source.sourceId,
+      repoUrl: source.repoUrl,
+      namespace: source.namespace,
+    });
 
     return res.json(result);
   } catch (error) {
