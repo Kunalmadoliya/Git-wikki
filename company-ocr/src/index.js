@@ -4,8 +4,11 @@ import { serve } from "inngest/express";
 import { inngest, functions } from "./inngest/index.js";
 import indexRouter from "./routes/index.route.js";
 import queryRouter from "./routes/query.route.js";
+import sourcesRouter from "./routes/sources.route.js";
+import { initSourceStore } from "./store/sourceStore.js";
 
 const app = express();
+initSourceStore();
 app.use(express.json({ limit: "256kb" }));
 
 // Enable CORS for frontend clients
@@ -24,6 +27,7 @@ app.use("/api/inngest", serve({ client: inngest, functions }));
 
 // REST API routes
 app.use("/api/index", indexRouter);
+app.use("/api/sources", sourcesRouter);
 app.use("/api/query", queryRouter);
 
 app.get("/", (req, res) => {
