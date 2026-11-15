@@ -1,7 +1,5 @@
 import {Octokit} from "@octokit/rest";
 
-const octokit = new Octokit({auth: process.env.GITHUB_TOKEN});
-
 const SKIP_DIRS = [
   // Dependencies
   "node_modules",
@@ -89,14 +87,19 @@ const SKIP_FILES = [
   "*.log",
 ];
 
+// Max individual file size to index (bytes). Files larger than this are skipped.
+const MAX_FILE_SIZE = 500_000; // 500 KB
+
+// How many blob fetches to run in parallel. Higher = faster but more API load.
+const BLOB_CONCURRENCY = 10;
+
 function shouldSkipFile(path, size) {
   const parts = path.split("/");
   const fileName = parts[parts.length - 1];
 
   if (parts.some((part) => SKIP_DIRS.includes(part))) return true;
-  if (SKIP_FILES.has(fileName)) return true;
-  if (typeof size === "number" && size > 200_000) return true;
-
+  if (SKIP_FILES.includes(fileName)) return true;
+  if (typeof size === "number" && size > MAX_FILE_SIZE) return true;
   if (fileName.endsWith(".min.js")) return true;
 
   return false;
@@ -118,43 +121,55 @@ export function parseRepo(input) {
 export async function getRepoFiles(token, owner, repo) {
   const octokit = new Octokit({auth: token});
 
-  const {data: files} = await octokit.rest.repos
-    .get({
-      owner,
-      repo,
-    })
-    .catch((error) => {
-      console.error(`Error fetching repo ${owner}/${repo}:`, error);
-      return {data: []};
-    });
+  const {data: repoInfo} = await octokit.rest.repos.get({owner, repo});
+
+  // Empty repositories have no commits yet — git/trees would 404
+  if (repoInfo.size === 0) {
+    console.warn(
+      `Repository ${owner}/${repo} is empty (no commits). Nothing to index.`,
+    );
+    return [];
+  }
+
+  const defaultBranch = repoInfo.default_branch;
+  console.log(`Fetching tree for ${owner}/${repo} on branch: ${defaultBranch}`);
 
   const {data: tree} = await octokit.rest.git.getTree({
     owner,
     repo,
-    sha: files.default_branch,
+    tree_sha: defaultBranch,
     recursive: true,
   });
 
+  const blobs = tree.tree.filter(
+    (file) => file.type === "blob" && !shouldSkipFile(file.path, file.size),
+  );
+
+  console.log(
+    `[github] ${blobs.length} files to fetch (of ${tree.tree.length} total tree entries)`,
+  );
+
   const fileArray = [];
 
-  for (const file of tree.tree) {
-    if (file.type !== "blob") {
-      continue;
-    }
-    if (shouldSkipFile(file.path, file.size)) {
-      continue;
-    }
-
-    const {data : blob} = await octokit.rest.git.getBlob({
-      owner,
-      repo,
-      file_sha: file.sha,
-    });
-    fileArray.push({path: file.path, content: Buffer.from(blob.content, "base64").toString("utf-8")});
-
-    if (fileArray.length >= 200) {
-      break;
-    }
+  // Fetch blobs in parallel batches to speed up large repos
+  for (let i = 0; i < blobs.length; i += BLOB_CONCURRENCY) {
+    const batch = blobs.slice(i, i + BLOB_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (file) => {
+        const { data: blob } = await octokit.rest.git.getBlob({
+          owner,
+          repo,
+          file_sha: file.sha,
+        });
+        return {
+          path: file.path,
+          content: Buffer.from(blob.content, "base64").toString("utf-8"),
+        };
+      }),
+    );
+    fileArray.push(...results);
+    console.log(`[github] fetched ${Math.min(i + BLOB_CONCURRENCY, blobs.length)}/${blobs.length} files`);
   }
+
   return fileArray;
 }
