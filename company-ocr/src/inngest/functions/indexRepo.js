@@ -21,6 +21,8 @@ const indexRepo = inngest.createFunction(
   async ({ event, step }) => {
     const { repoUrl, githubToken } = event.data;
 
+    console.log(`Starting indexing for repo: ${repoUrl}`);
+
     if (!repoUrl) throw new Error("event.data.repoUrl is required");
     if (!githubToken) throw new Error("event.data.githubToken is required");
 
@@ -28,6 +30,7 @@ const indexRepo = inngest.createFunction(
     const { repoKey, files } = await step.run("fetch-files", async () => {
       const { owner, repo, repoKey } = parseRepo(repoUrl);
       const files = await getRepoFiles(githubToken, owner, repo);
+      console.log(`Fetched ${files.length} files from repo: ${repoKey}`);
       return { repoKey, files };
     });
 
@@ -35,6 +38,8 @@ const indexRepo = inngest.createFunction(
     const documents = await step.run("chunk-files", () =>
       chunkText(files, repoKey)
     );
+
+    console.log(`Chunked ${documents.length} documents from ${files.length} files`);
 
     // ── Step 3: Upsert in batched steps so large repos don't time out ──────
     // Each step handles STEP_BATCH_SIZE documents independently,
@@ -47,6 +52,7 @@ const indexRepo = inngest.createFunction(
         upsertDocuments(batch, repoKey)
       );
       totalUpserted += result.upserted;
+      console.log(`[indexRepo] upserted ${totalUpserted}/${documents.length} chunks`);
     }
 
     return {
