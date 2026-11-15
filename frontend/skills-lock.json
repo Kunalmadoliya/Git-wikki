@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "skills": {
+    "bento": {
+      "source": "bergside/awesome-design-skills",
+      "sourceType": "github",
+      "skillPath": "skills/bento/SKILL.md",
+      "computedHash": "77da884e51a98192bcd779895d8a8ab5e3b9ca8d2bc3932e70fd9f5a1db4ff76"
+    }
+  }
+}

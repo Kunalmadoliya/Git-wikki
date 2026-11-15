@@ -1,8 +1,10 @@
 import { Router } from "express";
 import {
   QueryValidationError,
+  prepareQuery,
   runRepositoryQuery,
 } from "../services/query.js";
+import { getLatestIndexJob } from "../services/indexJobs.js";
 
 const router = Router();
 
@@ -14,6 +16,17 @@ const router = Router();
  */
 router.post("/", async (req, res) => {
   try {
+    const prepared = prepareQuery(req.body);
+    const indexJob = getLatestIndexJob(prepared.repoKey);
+    if (!indexJob || indexJob.status !== "completed") {
+      return res.status(409).json({
+        error: "Repository is not ready for querying",
+        repoKey: prepared.repoKey,
+        indexingStatus: indexJob?.status || "not_indexed",
+        phase: indexJob?.phase || "unknown",
+      });
+    }
+
     const result = await runRepositoryQuery(req.body);
 
     return res.json(result);

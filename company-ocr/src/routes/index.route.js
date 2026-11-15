@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { inngest } from "../inngest/index.js";
 import { parseRepo } from "../services/github.js";
+import {
+  createIndexJob,
+  getIndexJob,
+  publicIndexJob,
+  updateIndexJob,
+} from "../services/indexJobs.js";
 
 const router = Router();
 
@@ -17,8 +23,10 @@ router.post("/", async (req, res) => {
   if (!repoUrl) {
     return res.status(400).json({ error: "repoUrl is required" });
   }
-  if (!githubToken) {
-    return res.status(400).json({ error: "githubToken is required" });
+
+  const token = githubToken || process.env.GITHUB_TOKEN;
+  if (!token) {
+    return res.status(400).json({ error: "githubToken is required (not provided and GITHUB_TOKEN not set in environment)" });
   }
 
   // Validate the URL is parseable before firing the event
@@ -30,16 +38,38 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "Invalid GitHub repo URL" });
   }
 
-  // Fire-and-forget: Inngest handles the heavy lifting in the background
-  await inngest.send({
-    name: "repo/index",
-    data: { repoUrl, githubToken },
-  });
+  const jobId = createIndexJob({ repoKey: parsed.repoKey, token });
+
+  try {
+    await inngest.send({
+      name: "repo/index",
+      data: { repoUrl: repoUrl.trim(), jobId },
+    });
+  } catch (error) {
+    console.error("[index] Failed to dispatch Inngest job:", error);
+    updateIndexJob(jobId, {
+      status: "failed",
+      phase: "failed",
+      error: "Failed to dispatch indexing job",
+    });
+    return res.status(502).json({ error: "Failed to start repository indexing" });
+  }
 
   return res.status(202).json({
-    message: "Indexing started",
+    message: "Indexing queued",
+    jobId,
     repoKey: parsed.repoKey,
+    status: "queued",
   });
+});
+
+router.get("/status/:jobId", (req, res) => {
+  const job = getIndexJob(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Indexing job not found" });
+  }
+
+  return res.json(publicIndexJob(job));
 });
 
 export default router;
